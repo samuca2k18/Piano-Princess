@@ -15,7 +15,6 @@ class PianoKeyboardTwoOctaves extends StatefulWidget {
 }
 
 class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
-  // pointerId -> note
   final Map<int, String> _activePointers = {};
   final Set<String> _pressedNotes = {};
 
@@ -23,26 +22,32 @@ class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
   List<_KeyRect> _blackKeys = [];
   Size _lastSize = Size.zero;
 
-  // 2 oitavas (C4..B5) = 14 brancas
   static const List<String> _whiteNotes = [
     'C4','D4','E4','F4','G4','A4','B4',
     'C5','D5','E5','F5','G5','A5','B5',
   ];
 
-  // Pretas: C#, D#, F#, G#, A# por oitava
+  // ✅ Pretas em bemol (combina com Firestore/assets: Db/Eb/Gb/Ab/Bb)
   static const List<String> _blackNotes = [
-    'C#4','D#4','F#4','G#4','A#4',
-    'C#5','D#5','F#5','G#5','A#5',
+    'Db4','Eb4','Gb4','Ab4','Bb4',
+    'Db5','Eb5','Gb5','Ab5','Bb5',
   ];
 
-  // Índices das brancas dentro da oitava: C=0 D=1 E=2 F=3 G=4 A=5 B=6
-  // Pretas posicionadas "entre" brancas:
-  // C# entre C(0) e D(1)
-  // D# entre D(1) e E(2)
-  // F# entre F(3) e G(4)
-  // G# entre G(4) e A(5)
-  // A# entre A(5) e B(6)
+  // Pretas posicionadas "entre" brancas (por oitava)
   static const List<int> _blackAnchorsWithinOctave = [0, 1, 3, 4, 5];
+
+  void _safeSetState(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+  }
+
+  @override
+  void dispose() {
+    // ✅ evita setState after dispose e “notas presas”
+    _activePointers.clear();
+    _pressedNotes.clear();
+    super.dispose();
+  }
 
   void _buildKeyRects(Size size) {
     if (size == _lastSize && _whiteKeys.isNotEmpty) return;
@@ -70,13 +75,11 @@ class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
 
     // Black rects
     _blackKeys = [];
-    // Duas oitavas -> para cada oitava, desloca 7 brancas
     for (int octave = 0; octave < 2; octave++) {
       for (int k = 0; k < 5; k++) {
-        final anchor = _blackAnchorsWithinOctave[k]; // white index within octave
+        final anchor = _blackAnchorsWithinOctave[k];
         final whiteIndexGlobal = octave * 7 + anchor;
 
-        // centro entre a white[anchor] e white[anchor+1]
         final leftWhite = whiteIndexGlobal * whiteW;
         final blackLeft = leftWhite + whiteW - (blackW / 2);
 
@@ -91,10 +94,13 @@ class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
   }
 
   String? _hitTest(Offset p) {
-    // primeiro preta (está por cima)
+    // primeiro preta (está por cima), mas com área reduzida (não “rouba” toque)
     for (final k in _blackKeys) {
-      if (k.rect.contains(p)) return k.note;
+      final r = k.rect.deflate(6); // diminui a área clicável da preta
+      // e só considera preta na parte de cima
+      if (p.dy <= k.rect.height * 0.95 && r.contains(p)) return k.note;
     }
+
     for (final k in _whiteKeys) {
       if (k.rect.contains(p)) return k.note;
     }
@@ -103,10 +109,13 @@ class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
 
   void _noteOn(int pointerId, String note) {
     _activePointers[pointerId] = note;
+
     if (_pressedNotes.add(note)) {
       widget.onNoteOn?.call(note);
     }
-    setState(() {});
+
+    // ✅ TROCA setState por safeSetState
+    _safeSetState(() {});
   }
 
   void _noteOff(int pointerId) {
@@ -118,7 +127,9 @@ class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
       _pressedNotes.remove(note);
       widget.onNoteOff?.call(note);
     }
-    setState(() {});
+
+    // ✅ TROCA setState por safeSetState
+    _safeSetState(() {});
   }
 
   void _movePointer(int pointerId, Offset pos) {
@@ -126,7 +137,6 @@ class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
     final hit = _hitTest(pos);
 
     if (hit == null) {
-      // saiu do teclado
       if (current != null) _noteOff(pointerId);
       return;
     }
@@ -204,7 +214,9 @@ class _PianoKeyboardTwoOctavesState extends State<PianoKeyboardTwoOctaves> {
                   height: k.rect.height,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: pressed ? cs.primary.withOpacity(0.85) : Colors.black.withOpacity(0.88),
+                      color: pressed
+                          ? cs.primary.withOpacity(0.85)
+                          : Colors.black.withOpacity(0.88),
                       borderRadius: BorderRadius.circular(10),
                       boxShadow: [
                         BoxShadow(

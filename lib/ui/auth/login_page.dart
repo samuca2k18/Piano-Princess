@@ -1,6 +1,10 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import '../../services/auth_service.dart';
+import 'package:piano_princess/core/extensions.dart';
+import '../../config/app_constants.dart';
+import '../../data/services/auth_service.dart';
+import '../../data/services/firestore_service.dart';
+import '../components/ui_components.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -12,6 +16,8 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _auth = AuthService.instance;
+
   bool _obscure = true;
   bool _loading = false;
 
@@ -22,408 +28,157 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  final _auth = AuthService.instance;
-
-
-  Future<void> _login() async {
+  Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
+
+    final email = _emailCtrl.text.trim();
+    final password = _passCtrl.text;
+
+    if (email.isEmpty || password.isEmpty) {
+      context.showErrorSnackBar('Preenchimento campos obrigatórios');
+      return;
+    }
+
+    if (!email.isValidEmail) {
+      context.showErrorSnackBar('Email inválido');
+      return;
+    }
+
     setState(() => _loading = true);
 
     try {
-      await _auth.login(_emailCtrl.text.trim(), _passCtrl.text);
+      await _auth.login(email, password);
 
-      // ✅ não navega
-      // AuthGate abre a home sozinho
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await FirestoreService.instance.updateLastLogin(user.uid);
+      }
+
+      if (!mounted) return;
+      context.showSuccessSnackBar('Login realizado! 🎉');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      context.showErrorSnackBar(e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  Future<void> _handleGoogleLogin() async {
+    setState(() => _loading = true);
+
+    try {
+      final cred = await _auth.loginWithGoogle();
+      final user = cred.user;
+
+      if (user != null) {
+        await FirestoreService.instance.ensureUserProfileFromAuth(
+          uid: user.uid,
+          email: user.email ?? '',
+          name: user.displayName ?? 'Princesa',
+          avatarUrl: user.photoURL,
+        );
+      }
+
+      if (!mounted) return;
+      context.showSuccessSnackBar('Bem-vinda! 👑');
+    } catch (e) {
+      if (!mounted) return;
+      context.showErrorSnackBar(e.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _handleForgotPassword() async {
+    final email = _emailCtrl.text.trim();
+
+    if (email.isEmpty) {
+      context.showErrorSnackBar('Digite seu email primeiro');
+      return;
+    }
+
+    if (!email.isValidEmail) {
+      context.showErrorSnackBar('Email inválido');
+      return;
+    }
+
+    try {
+      await _auth.resetPassword(email);
+      if (!mounted) return;
+      context.showSuccessSnackBar('Email de recuperação enviado ✅');
+    } catch (e) {
+      if (!mounted) return;
+      context.showErrorSnackBar(e.toString());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       body: Stack(
         children: [
-          // Fundo encantado
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFFFFE1F3), // rosa claro
-                  Color(0xFFE7D7FF), // lilás claro
-                  Color(0xFFD6F2FF), // azul bem clarinho
-                ],
-              ),
-            ),
-          ),
-
-          // brilhinhos (pontinhos)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _SparklesPainter(),
-              ),
-            ),
-          ),
-
-          SafeArea(
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const SizedBox(height: 8),
-
-                      // Logo/Topo
-                      _HeaderBadge(
-                        title: 'Piano Princess',
-                        subtitle: 'Entre para continuar tocando ✨',
-                      ),
-
-                      const SizedBox(height: 18),
-
-                      // Card principal
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.85),
-                          borderRadius: BorderRadius.circular(28),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
-                              blurRadius: 24,
-                              offset: const Offset(0, 14),
-                            ),
-                          ],
-                          border: Border.all(
-                            color: const Color(0xFFBFA6FF).withOpacity(0.35),
-                            width: 1,
-                          ),
-                        ),
-                        padding: const EdgeInsets.all(18),
-                        child: Column(
-                          children: [
-                            _Input(
-                              controller: _emailCtrl,
-                              hint: 'Email',
-                              icon: Icons.mail_rounded,
-                              keyboardType: TextInputType.emailAddress,
-                            ),
-                            const SizedBox(height: 12),
-                            _Input(
-                              controller: _passCtrl,
-                              hint: 'Senha',
-                              icon: Icons.lock_rounded,
-                              obscureText: _obscure,
-                              suffix: IconButton(
-                                onPressed: () => setState(() => _obscure = !_obscure),
-                                icon: Icon(
-                                  _obscure ? Icons.visibility_rounded : Icons.visibility_off_rounded,
-                                ),
-                                tooltip: _obscure ? 'Mostrar senha' : 'Ocultar senha',
-                              ),
-                            ),
-
-                            const SizedBox(height: 10),
-
-                            Row(
-                              children: [
-                                TextButton(
-                                  onPressed: () async {
-                                    final email = _emailCtrl.text.trim();
-                                    if (email.isEmpty) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Digite seu email primeiro.')),
-                                      );
-                                      return;
-                                    }
-
-                                    try {
-                                      await _auth.resetPassword(email);
-                                      if (!mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Email de recuperação enviado ✅')),
-                                      );
-                                    } catch (e) {
-                                      if (!mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text(e.toString())),
-                                      );
-                                    }
-                                  }
-                                  ,
-                                  child: const Text('Esqueci minha senha'),
-                                ),
-                                const Spacer(),
-                                _PillTag(text: 'Nível 1', icon: Icons.auto_awesome_rounded),
-                              ],
-                            ),
-
-                            const SizedBox(height: 6),
-
-                            // Botão principal
-                            SizedBox(
-                              width: double.infinity,
-                              height: 52,
-                              child: ElevatedButton(
-                                onPressed: _loading ? null : _login,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF8A5CFF),
-                                  foregroundColor: Colors.white,
-                                  elevation: 0,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(18),
-                                  ),
-                                ),
-                                child: _loading
-                                    ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                                    : const Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.piano_rounded),
-                                    SizedBox(width: 10),
-                                    Text(
-                                      'Entrar',
-                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-
-                            const SizedBox(height: 14),
-
-                            // Separador
-                            Row(
-                              children: [
-                                Expanded(child: Divider(color: Colors.black.withOpacity(0.12))),
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                                  child: Text(
-                                    'ou',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: Colors.black54,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                                Expanded(child: Divider(color: Colors.black.withOpacity(0.12))),
-                              ],
-                            ),
-
-                            const SizedBox(height: 14),
-
-                            // Botões sociais (mock)
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _SocialButton(
-                                    label: 'Google',
-                                    icon: Icons.g_mobiledata_rounded,
-                                    onPressed: () {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Google login mockado')),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: _SocialButton(
-                                    label: 'Apple',
-                                    icon: Icons.apple_rounded,
-                                    onPressed: () {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Apple login mockado')),
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-
-                            const SizedBox(height: 10),
-
-                            // Criar conta
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Text('Não tem conta?'),
-                                TextButton(
-                                  onPressed: () => Navigator.pushNamed(context, '/signup'),
-                                  child: const Text('Criar conta'),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 14),
-
-                      // Rodapé
-                      Text(
-                        'Ao entrar, você concorda com nossos termos (mockado).',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.black54,
-                          height: 1.3,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
+          _buildBackground(),
+          _buildContent(),
         ],
       ),
     );
   }
-}
 
-class _Input extends StatelessWidget {
-  final TextEditingController controller;
-  final String hint;
-  final IconData icon;
-  final bool obscureText;
-  final Widget? suffix;
-  final TextInputType? keyboardType;
-
-  const _Input({
-    required this.controller,
-    required this.hint,
-    required this.icon,
-    this.obscureText = false,
-    this.suffix,
-    this.keyboardType,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      obscureText: obscureText,
-      keyboardType: keyboardType,
-      decoration: InputDecoration(
-        prefixIcon: Icon(icon),
-        suffixIcon: suffix,
-        hintText: hint,
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: Colors.black.withOpacity(0.08)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0xFF8A5CFF), width: 1.4),
-        ),
-      ),
-    );
-  }
-}
-
-class _SocialButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  const _SocialButton({
-    required this.label,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 48,
-      child: OutlinedButton(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          side: BorderSide(color: Colors.black.withOpacity(0.12)),
-          backgroundColor: Colors.white.withOpacity(0.75),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon),
-            const SizedBox(width: 8),
-            Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+  Widget _buildBackground() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFFFFE1F3),
+            Color(0xFFE7D7FF),
+            Color(0xFFD6F2FF),
           ],
         ),
       ),
     );
   }
-}
 
-class _PillTag extends StatelessWidget {
-  final String text;
-  final IconData icon;
-
-  const _PillTag({required this.text, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF8A5CFF).withOpacity(0.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF8A5CFF).withOpacity(0.28)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: const Color(0xFF6F3DFF)),
-          const SizedBox(width: 6),
-          Text(
-            text,
-            style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF6F3DFF)),
+  Widget _buildContent() {
+    return SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppConstants.paddingMedium,
+            vertical: AppConstants.paddingXL,
           ),
-        ],
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(height: 8),
+                _buildHeader(),
+                const SizedBox(height: 18),
+                _buildLoginForm(),
+                const SizedBox(height: 14),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
-}
 
-class _HeaderBadge extends StatelessWidget {
-  final String title;
-  final String subtitle;
-
-  const _HeaderBadge({required this.title, required this.subtitle});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildHeader() {
     return Column(
       children: [
-        // “Coroa”/ícone
         Container(
           width: 78,
           height: 78,
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFF8A5CFF), Color(0xFFFF5BBE)],
+              colors: [
+                Color(AppConstants.primaryDarkColor),
+                Color(AppConstants.accentColor),
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -436,12 +191,16 @@ class _HeaderBadge extends StatelessWidget {
               ),
             ],
           ),
-          child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 34),
+          child: const Icon(
+            Icons.auto_awesome_rounded,
+            color: Colors.white,
+            size: 34,
+          ),
         ),
         const SizedBox(height: 12),
-        Text(
-          title,
-          style: const TextStyle(
+        const Text(
+          'Piano Princess',
+          style: TextStyle(
             fontSize: 26,
             fontWeight: FontWeight.w900,
             letterSpacing: 0.2,
@@ -449,7 +208,7 @@ class _HeaderBadge extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         Text(
-          subtitle,
+          'Entre para continuar tocando ✨',
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 14.5,
@@ -460,32 +219,127 @@ class _HeaderBadge extends StatelessWidget {
       ],
     );
   }
-}
 
-/// Pintor simples de “sparkles” no fundo
-class _SparklesPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = Colors.white.withOpacity(0.55);
-    final p2 = Paint()..color = Colors.white.withOpacity(0.25);
-
-    // posições fixas (leve e simples)
-    final pts = <Offset>[
-      Offset(size.width * 0.12, size.height * 0.18),
-      Offset(size.width * 0.82, size.height * 0.16),
-      Offset(size.width * 0.22, size.height * 0.42),
-      Offset(size.width * 0.70, size.height * 0.36),
-      Offset(size.width * 0.12, size.height * 0.72),
-      Offset(size.width * 0.84, size.height * 0.72),
-      Offset(size.width * 0.52, size.height * 0.10),
-      Offset(size.width * 0.46, size.height * 0.88),
-    ];
-
-    for (var i = 0; i < pts.length; i++) {
-      canvas.drawCircle(pts[i], i.isEven ? 3.2 : 2.2, i.isEven ? p : p2);
-    }
+  Widget _buildLoginForm() {
+    return SimpleCard(
+      padding: const EdgeInsets.all(AppConstants.paddingLarge),
+      borderRadius: AppConstants.radiusXL,
+      child: Column(
+        children: [
+          AuthTextField(
+            controller: _emailCtrl,
+            hint: 'Email',
+            icon: Icons.mail_rounded,
+            keyboardType: TextInputType.emailAddress,
+          ),
+          const SizedBox(height: AppConstants.paddingDefault),
+          AuthTextField(
+            controller: _passCtrl,
+            hint: 'Senha',
+            icon: Icons.lock_rounded,
+            obscureText: _obscure,
+            suffix: IconButton(
+              onPressed: () => setState(() => _obscure = !_obscure),
+              icon: Icon(
+                _obscure
+                    ? Icons.visibility_rounded
+                    : Icons.visibility_off_rounded,
+              ),
+              tooltip: _obscure ? 'Mostrar senha' : 'Ocultar senha',
+            ),
+          ),
+          const SizedBox(height: AppConstants.paddingDefault),
+          Row(
+            children: [
+              TextButton(
+                onPressed: _handleForgotPassword,
+                child: const Text('Esqueci minha senha'),
+              ),
+              const Spacer(),
+              _buildLevelBadge(),
+            ],
+          ),
+          const SizedBox(height: AppConstants.paddingSmall),
+          PrimaryButton(
+            label: 'Entrar',
+            onPressed: _handleLogin,
+            isLoading: _loading,
+            icon: Icons.piano_rounded,
+          ),
+          const SizedBox(height: 14),
+          _buildDivider(),
+          const SizedBox(height: 14),
+          SecondaryButton(
+            label: 'Entrar com Google',
+            onPressed: _handleGoogleLogin,
+            icon: Icons.g_mobiledata_rounded,
+          ),
+          const SizedBox(height: 12),
+          _buildSignupLink(),
+        ],
+      ),
+    );
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget _buildLevelBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 10,
+        vertical: 6,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(AppConstants.primaryDarkColor).withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: const Color(AppConstants.primaryDarkColor).withOpacity(0.28),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.auto_awesome_rounded, size: 16),
+          const SizedBox(width: 6),
+          Text(
+            'Nível 1',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: Colors.black.withOpacity(0.7),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDivider() {
+    return Row(
+      children: [
+        Expanded(child: Divider(color: Colors.black.withOpacity(0.12))),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Text(
+            'ou',
+            style: TextStyle(
+              color: Colors.black54,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        Expanded(child: Divider(color: Colors.black.withOpacity(0.12))),
+      ],
+    );
+  }
+
+  Widget _buildSignupLink() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Text('Não tem conta? '),
+        TextButton(
+          onPressed: () => Navigator.pushNamed(context, '/signup'),
+          child: const Text('Criar conta'),
+        ),
+      ],
+    );
+  }
 }

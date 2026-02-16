@@ -1,4 +1,6 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:piano_princess/data/services/firestore_service.dart';
 import 'package:piano_princess/ui/player/piano_player_page.dart';
 
 class MusicPage extends StatefulWidget {
@@ -12,55 +14,43 @@ class _MusicPageState extends State<MusicPage> {
   final TextEditingController _search = TextEditingController();
   String _selectedCategory = 'Todas';
 
-  // MOCK: depois vira banco
-  final List<SongItem> _songs = const [
-    SongItem(
-      id: 's1',
-      title: 'Brilha Brilha Estrelinha',
-      subtitle: 'Iniciante • Mão direita',
-      category: 'Iniciante',
-      progress: 0.60,
-      minutes: 6,
-    ),
-    SongItem(
-      id: 's2',
-      title: 'A Bela e a Fera',
-      subtitle: 'Iniciante • Tema Disney',
-      category: 'Disney',
-      progress: 0.20,
-      minutes: 4,
-    ),
-    SongItem(
-      id: 's3',
-      title: 'Parabéns Pra Você',
-      subtitle: 'Iniciante • Completa',
-      category: 'Iniciante',
-      progress: 0.00,
-      minutes: 5,
-    ),
-    SongItem(
-      id: 's4',
-      title: 'Noite Feliz',
-      subtitle: 'Fácil • Natal',
-      category: 'Natal',
-      progress: 0.35,
-      minutes: 7,
-    ),
-    SongItem(
-      id: 's5',
-      title: 'Asa Branca',
-      subtitle: 'Fácil • Brasil',
-      category: 'Brasil',
-      progress: 0.10,
-      minutes: 8,
-    ),
-  ];
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
-  List<String> get _categories => const ['Todas', 'Iniciante', 'Disney', 'Natal', 'Brasil'];
+  void _openSong(String songId) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PianoPlayerPage(songId: songId),
+      ),
+    );
+  }
 
-  List<SongItem> get _filtered {
+  List<SongItem> _mergeSongsWithProgress({
+    required List<Map<String, dynamic>> songs,
+    required Map<String, Map<String, dynamic>> progressBySongId,
+  }) {
+    return songs.map((s) {
+      final id = s['id'] as String;
+      final p = progressBySongId[id];
+
+      return SongItem(
+        id: id,
+        title: (s['title'] as String?) ?? 'Sem título',
+        subtitle: (s['subtitle'] as String?) ?? '',
+        category: (s['category'] as String?) ?? 'Outros',
+        minutes: (s['minutes'] as num?)?.toInt() ?? 0,
+        progress: (p?['percent'] as num?)?.toDouble() ?? 0.0,
+      );
+    }).toList();
+  }
+
+  List<SongItem> _applyFilters(List<SongItem> songs) {
     final q = _search.text.trim().toLowerCase();
-    return _songs.where((s) {
+
+    return songs.where((s) {
       final matchCategory = _selectedCategory == 'Todas' || s.category == _selectedCategory;
       final matchText = q.isEmpty ||
           s.title.toLowerCase().contains(q) ||
@@ -69,161 +59,191 @@ class _MusicPageState extends State<MusicPage> {
     }).toList();
   }
 
-  List<SongItem> get _continuePlaying {
-    final list = List<SongItem>.from(_songs)
+  List<SongItem> _continuePlaying(List<SongItem> songs) {
+    final list = List<SongItem>.from(songs)
       ..sort((a, b) => b.progress.compareTo(a.progress));
     return list.where((s) => s.progress > 0 && s.progress < 1).take(6).toList();
   }
 
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
+  List<String> _buildCategories(List<SongItem> songs) {
+    final set = <String>{};
+    for (final s in songs) {
+      if (s.category.trim().isNotEmpty) set.add(s.category.trim());
+    }
+    final cats = set.toList()..sort();
+    return ['Todas', ...cats];
   }
-
-  void _openSong(SongItem song) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => PianoPlayerPage(
-          songId: song.id,
-          title: song.title,
-          subtitle: song.subtitle,
-          progress: song.progress,
-        ),
-      ),
-    );
-  }
-
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final user = FirebaseAuth.instance.currentUser;
 
-    return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
-        children: [
-          Text(
-            'Músicas',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              color: Colors.black.withOpacity(0.88),
-            ),
-          ),
-          const SizedBox(height: 10),
+    if (user == null) {
+      return const Center(child: Text('Faça login para ver as músicas.'));
+    }
 
-          // Busca
-          TextField(
-            controller: _search,
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-              hintText: 'Buscar música...',
-              prefixIcon: const Icon(Icons.search_rounded),
-              suffixIcon: _search.text.isEmpty
-                  ? null
-                  : IconButton(
-                icon: const Icon(Icons.close_rounded),
-                onPressed: () {
-                  _search.clear();
-                  setState(() {});
-                },
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: FirestoreService.instance.watchSongs(),
+      builder: (context, songsSnap) {
+        if (songsSnap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final songsRaw = songsSnap.data ?? [];
+
+        if (songsRaw.isEmpty) {
+          return const Center(child: Text('Nenhuma música cadastrada no banco.'));
+        }
+
+        return StreamBuilder<List<Map<String, dynamic>>>(
+          stream: FirestoreService.instance.watchUserProgressList(user.uid),
+          builder: (context, progSnap) {
+            final progressList = progSnap.data ?? [];
+            final progressBySongId = <String, Map<String, dynamic>>{
+              for (final p in progressList) (p['id'] as String): p,
+            };
+
+            final songs = _mergeSongsWithProgress(
+              songs: songsRaw,
+              progressBySongId: progressBySongId,
+            );
+
+            final categories = _buildCategories(songs);
+            final filtered = _applyFilters(songs);
+            final continuePlaying = _continuePlaying(songs);
+
+            return SafeArea(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
+                children: [
+                  Text(
+                    'Músicas',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black.withOpacity(0.88),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Busca
+                  TextField(
+                    controller: _search,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      hintText: 'Buscar música...',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: _search.text.isEmpty
+                          ? null
+                          : IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () {
+                          _search.clear();
+                          setState(() {});
+                        },
+                      ),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide(color: Colors.black.withOpacity(0.06)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide(color: Colors.black.withOpacity(0.06)),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Continue tocando
+                  if (continuePlaying.isNotEmpty) ...[
+                    _SectionTitle(
+                      title: 'Continue tocando',
+                      actionText: 'Ver tudo',
+                      onTap: () {
+                        // pode melhorar depois: scroll até a lista
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 130,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: continuePlaying.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 12),
+                        itemBuilder: (context, i) {
+                          final song = continuePlaying[i];
+                          return _ContinueCard(
+                            song: song,
+                            colorScheme: cs,
+                            onTap: () => _openSong(song.id),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Categorias
+                  _SectionTitle(
+                    title: 'Categorias',
+                    actionText: 'Limpar',
+                    onTap: () => setState(() => _selectedCategory = 'Todas'),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: categories.map((c) {
+                      final selected = c == _selectedCategory;
+                      return ChoiceChip(
+                        label: Text(c),
+                        selected: selected,
+                        onSelected: (_) => setState(() => _selectedCategory = c),
+                        selectedColor: cs.primary.withOpacity(0.18),
+                        backgroundColor: Colors.white,
+                        labelStyle: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: selected ? cs.primary : Colors.black.withOpacity(0.78),
+                        ),
+                        side: BorderSide(color: cs.primary.withOpacity(selected ? 0.22 : 0.10)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                      );
+                    }).toList(),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Lista
+                  Row(
+                    children: [
+                      const Text('Todas as músicas', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+                      const Spacer(),
+                      Text(
+                        '${filtered.length}',
+                        style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  ...filtered.map((song) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _SongTile(
+                      song: song,
+                      colorScheme: cs,
+                      onTap: () => _openSong(song.id),
+                    ),
+                  )),
+                ],
               ),
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: Colors.black.withOpacity(0.06)),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: Colors.black.withOpacity(0.06)),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // Continue tocando
-          if (_continuePlaying.isNotEmpty) ...[
-            _SectionTitle(
-              title: 'Continue tocando',
-              actionText: 'Ver tudo',
-              onTap: () {},
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 130,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: _continuePlaying.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 12),
-                itemBuilder: (context, i) {
-                  final song = _continuePlaying[i];
-                  return _ContinueCard(
-                    song: song,
-                    colorScheme: cs,
-                    onTap: () => _openSong(song),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-
-          // Categorias
-          _SectionTitle(
-            title: 'Categorias',
-            actionText: 'Limpar',
-            onTap: () => setState(() => _selectedCategory = 'Todas'),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: _categories.map((c) {
-              final selected = c == _selectedCategory;
-              return ChoiceChip(
-                label: Text(c),
-                selected: selected,
-                onSelected: (_) => setState(() => _selectedCategory = c),
-                selectedColor: cs.primary.withOpacity(0.18),
-                backgroundColor: Colors.white,
-                labelStyle: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: selected ? cs.primary : Colors.black.withOpacity(0.78),
-                ),
-                side: BorderSide(color: cs.primary.withOpacity(selected ? 0.22 : 0.10)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-              );
-            }).toList(),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Lista
-          Row(
-            children: [
-              const Text('Todas as músicas', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
-              const Spacer(),
-              Text(
-                '${_filtered.length}',
-                style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          ..._filtered.map((song) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _SongTile(
-              song: song,
-              colorScheme: cs,
-              onTap: () => _openSong(song),
-            ),
-          )),
-        ],
-      ),
+            );
+          },
+        );
+      },
     );
   }
 }
